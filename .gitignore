@@ -1,4 +1,6 @@
 .next/
+dist/
+.wrangler/
 node_modules/
 .env*
 !.env.example
