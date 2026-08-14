@@ -4,15 +4,28 @@
 -- ============================================================
 
 create extension if not exists pgcrypto;
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
 
 -- ---------- Profiles ----------
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  display_name text,
+  username text not null unique check (username ~ '^[a-z0-9_]{3,32}$'),
+  display_name text not null,
   avatar_url text,
-  created_at timestamptz not null default now()
+  bio text not null default '',
+  status text not null default 'offline',
+  last_seen timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
+
+create index if not exists profiles_display_name_idx
+on public.profiles (display_name);
+
+create unique index if not exists profiles_username_lower_idx
+on public.profiles (lower(username));
 
 alter table public.profiles enable row level security;
 
@@ -21,31 +34,70 @@ create policy "profiles_select_authenticated"
 on public.profiles
 for select
 to authenticated
-using (true);
+using ((select auth.uid()) is not null);
 
 drop policy if exists "profiles_update_self" on public.profiles;
 create policy "profiles_update_self"
 on public.profiles
 for update
 to authenticated
-using (auth.uid() = id)
-with check (auth.uid() = id);
+using ((select auth.uid()) = id)
+with check ((select auth.uid()) = id);
+
+revoke all on table public.profiles from anon;
+grant select, update on table public.profiles to authenticated;
 
 -- Автоматически создаём профиль после регистрации.
-create or replace function public.handle_new_user()
+create or replace function private.handle_new_user()
 returns trigger
 language plpgsql
 security definer
-set search_path = public
+set search_path = ''
 as $$
+declare
+  base_username text;
+  generated_username text;
 begin
-  insert into public.profiles (id, display_name)
+  base_username := regexp_replace(
+    lower(
+      coalesce(
+        nullif(new.raw_user_meta_data ->> 'display_name', ''),
+        split_part(coalesce(new.email, 'user'), '@', 1),
+        'user'
+      )
+    ),
+    '[^a-z0-9_]+',
+    '',
+    'g'
+  );
+
+  if char_length(base_username) < 3 then
+    base_username := 'user';
+  end if;
+
+  generated_username := left(base_username, 23) || '_' ||
+    replace(substring(new.id::text from 1 for 8), '-', '');
+
+  insert into public.profiles (
+    id,
+    username,
+    display_name,
+    bio,
+    status,
+    created_at,
+    updated_at
+  )
   values (
     new.id,
+    generated_username,
     coalesce(
-      nullif(new.raw_user_meta_data ->> 'display_name', ''),
+      nullif(trim(new.raw_user_meta_data ->> 'display_name'), ''),
       split_part(coalesce(new.email, 'user'), '@', 1)
-    )
+    ),
+    '',
+    'offline',
+    now(),
+    now()
   )
   on conflict (id) do nothing;
 
@@ -53,10 +105,32 @@ begin
 end;
 $$;
 
+revoke all on function private.handle_new_user()
+from public, anon, authenticated;
+
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
 after insert on auth.users
-for each row execute procedure public.handle_new_user();
+for each row execute function private.handle_new_user();
+
+create or replace function private.set_profile_updated_at()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+revoke all on function private.set_profile_updated_at()
+from public, anon, authenticated;
+
+drop trigger if exists profiles_set_updated_at on public.profiles;
+create trigger profiles_set_updated_at
+before update on public.profiles
+for each row execute function private.set_profile_updated_at();
 
 -- ---------- Chats ----------
 
@@ -72,6 +146,9 @@ create table if not exists public.chat_members (
   joined_at timestamptz not null default now(),
   primary key (chat_id, user_id)
 );
+
+create index if not exists chat_members_user_id_idx
+on public.chat_members (user_id);
 
 alter table public.chats enable row level security;
 alter table public.chat_members enable row level security;
@@ -92,6 +169,9 @@ create table if not exists public.messages (
 create index if not exists messages_chat_created_idx
 on public.messages (chat_id, created_at);
 
+create index if not exists messages_sender_id_idx
+on public.messages (sender_id);
+
 alter table public.messages enable row level security;
 
 drop policy if exists "messages_select_if_member" on public.messages;
@@ -104,7 +184,7 @@ using (
     select 1
     from public.chat_members cm
     where cm.chat_id = messages.chat_id
-      and cm.user_id = auth.uid()
+      and cm.user_id = (select auth.uid())
   )
 );
 
@@ -114,12 +194,12 @@ on public.messages
 for insert
 to authenticated
 with check (
-  sender_id = auth.uid()
+  sender_id = (select auth.uid())
   and exists (
     select 1
     from public.chat_members cm
     where cm.chat_id = messages.chat_id
-      and cm.user_id = auth.uid()
+      and cm.user_id = (select auth.uid())
   )
 );
 
@@ -187,7 +267,7 @@ begin
 end;
 $$;
 
-revoke all on function public.start_direct_chat(uuid) from public;
+revoke all on function public.start_direct_chat(uuid) from public, anon;
 grant execute on function public.start_direct_chat(uuid) to authenticated;
 
 -- ---------- Realtime ----------
