@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Violet Messenger",
-    short_name: "Violet",
+    name: "МастерPRO",
+    short_name: "МастерPRO",
     description: "Личные сообщения, контакты и звонки",
     start_url: "/messenger",
     scope: "/",
