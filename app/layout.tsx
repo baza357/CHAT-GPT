@@ -5,11 +5,11 @@ import { InternetCallProvider } from "@/components/calls/InternetCallProvider";
 import { NotificationProvider } from "@/components/notifications/NotificationProvider";
 
 export const metadata: Metadata = {
-  title: { default: "Violet", template: "%s — Violet" },
-  description: "Violet — личные сообщения, контакты и звонки",
+  title: { default: "МастерPRO", template: "%s — МастерPRO" },
+  description: "МастерPRO — личные сообщения, контакты и звонки",
   manifest: "/manifest.webmanifest",
   icons: { icon: "/icon.svg", apple: "/icon.svg" },
-  appleWebApp: { capable: true, statusBarStyle: "default", title: "Violet" },
+  appleWebApp: { capable: true, statusBarStyle: "default", title: "МастерPRO" },
 };
 
 export const viewport: Viewport = {
