@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ContactSearch } from "@/components/messenger/ContactSearch";
 import { createClient } from "@/lib/supabase/client";
 import type { Message, UserProfile } from "@/lib/types";
 
@@ -11,6 +12,9 @@ type CurrentUser = {
   email: string;
 };
 
+const profileFields =
+  "id, contact_number, username, display_name, avatar_url, bio, status, last_seen, created_at, updated_at";
+
 function initials(profile: UserProfile) {
   return (profile.display_name.trim() || "U").slice(0, 2).toUpperCase();
 }
@@ -18,6 +22,7 @@ function initials(profile: UserProfile) {
 export function MessengerLayout({ user }: { user: CurrentUser }) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
+  const [ownProfile, setOwnProfile] = useState<UserProfile | null>(null);
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [selected, setSelected] = useState<UserProfile | null>(null);
   const [chatId, setChatId] = useState<string | null>(null);
@@ -27,26 +32,65 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
   const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    async function loadProfiles() {
-      const { data, error: queryError } = await supabase
-        .from("profiles")
-        .select(
-          "id, username, display_name, avatar_url, bio, status, last_seen, created_at, updated_at",
-        )
-        .neq("id", user.id)
-        .order("display_name", { ascending: true });
+  const fetchContacts = useCallback(async () => {
+    const { data: contactRows, error: contactsError } = await supabase
+      .from("contacts")
+      .select("contact_id")
+      .eq("owner_id", user.id);
 
-      if (queryError) {
-        setError("Не удалось загрузить пользователей.");
-        return;
-      }
-
-      setProfiles((data ?? []) as UserProfile[]);
+    if (contactsError) {
+      throw contactsError;
     }
 
-    void loadProfiles();
+    const ids = (contactRows ?? []).map((row) => row.contact_id as string);
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const { data, error: profilesError } = await supabase
+      .from("profiles")
+      .select(profileFields)
+      .in("id", ids)
+      .order("display_name", { ascending: true });
+
+    if (profilesError) {
+      throw profilesError;
+    }
+
+    return (data ?? []) as UserProfile[];
   }, [supabase, user.id]);
+
+  const loadContacts = useCallback(async () => {
+    try {
+      setProfiles(await fetchContacts());
+    } catch {
+      setError("Не удалось загрузить контакты.");
+    }
+  }, [fetchContacts]);
+
+  useEffect(() => {
+    async function loadInitialData() {
+      try {
+        const [ownProfileResponse, contacts] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select(profileFields)
+            .eq("id", user.id)
+            .single(),
+          fetchContacts(),
+        ]);
+
+        if (ownProfileResponse.data) {
+          setOwnProfile(ownProfileResponse.data as UserProfile);
+        }
+        setProfiles(contacts);
+      } catch {
+        setError("Не удалось загрузить контакты.");
+      }
+    }
+
+    void loadInitialData();
+  }, [fetchContacts, supabase, user.id]);
 
   useEffect(() => {
     if (!chatId) return;
@@ -118,6 +162,26 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
     setChatId(data as string);
   }
 
+  async function removeContact(profile: UserProfile) {
+    const { error: deleteError } = await supabase
+      .from("contacts")
+      .delete()
+      .eq("owner_id", user.id)
+      .eq("contact_id", profile.id);
+
+    if (deleteError) {
+      setError("Не удалось удалить контакт.");
+      return;
+    }
+
+    if (selected?.id === profile.id) {
+      setSelected(null);
+      setChatId(null);
+      setMessages([]);
+    }
+    await loadContacts();
+  }
+
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const body = draft.trim();
@@ -161,6 +225,9 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
             <div>
               <div className="brand">Messenger</div>
               <div className="user-email">{user.email}</div>
+              {ownProfile && (
+                <div className="own-contact-number">Ваш номер: {ownProfile.contact_number}</div>
+              )}
             </div>
             <div className="sidebar-actions">
               <Link className="secondary" href="/settings">Настройки</Link>
@@ -169,25 +236,42 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
           </div>
         </div>
 
-        <div className="contacts-title">Пользователи</div>
+        <ContactSearch
+          currentUserId={user.id}
+          existingContactIds={profiles.map((profile) => profile.id)}
+          onContactAdded={loadContacts}
+        />
+
+        <div className="contacts-title">Мои контакты</div>
         <div className="contacts">
           {profiles.length === 0 ? (
             <div className="muted contact-empty">
-              Пока нет других пользователей. Зарегистрируйте второй аккаунт.
+              Контактов пока нет. Найдите человека по его номеру и добавьте сюда.
             </div>
           ) : (
             profiles.map((profile) => (
-              <button
+              <div
                 key={profile.id}
                 className={`contact ${selected?.id === profile.id ? "active" : ""}`}
-                onClick={() => openChat(profile)}
               >
-                <div className="avatar">{initials(profile)}</div>
-                <div>
-                  <div className="contact-name">{profile.display_name}</div>
-                  <div className="contact-sub">@{profile.username}</div>
-                </div>
-              </button>
+                <button className="contact-open" onClick={() => openChat(profile)}>
+                  <div className="avatar">{initials(profile)}</div>
+                  <div>
+                    <div className="contact-name">{profile.display_name}</div>
+                    <div className="contact-sub">
+                      @{profile.username} · № {profile.contact_number}
+                    </div>
+                  </div>
+                </button>
+                <button
+                  className="contact-remove"
+                  aria-label={`Удалить ${profile.display_name} из контактов`}
+                  title="Удалить из контактов"
+                  onClick={() => removeContact(profile)}
+                >
+                  ×
+                </button>
+              </div>
             ))
           )}
         </div>
@@ -197,7 +281,7 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
         {!selected ? (
           <div className="empty">
             <div>
-              <h2>Выберите пользователя</h2>
+              <h2>Выберите контакт</h2>
               <p>Слева выберите человека, чтобы начать переписку.</p>
               {error && <div className="error">{error}</div>}
             </div>
@@ -218,7 +302,9 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
               <div className="avatar">{initials(selected)}</div>
               <div>
                 <div className="contact-name">{selected.display_name}</div>
-                <div className="contact-sub">@{selected.username}</div>
+                <div className="contact-sub">
+                  @{selected.username} · № {selected.contact_number}
+                </div>
               </div>
             </header>
 

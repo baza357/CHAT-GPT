@@ -6,12 +6,14 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 type EditableProfile = {
+  contact_number: number | null;
   display_name: string;
   username: string;
   bio: string;
 };
 
 const emptyProfile: EditableProfile = {
+  contact_number: null,
   display_name: "",
   username: "",
   bio: "",
@@ -30,7 +32,7 @@ export function ProfileSettings({ userId }: { userId: string }) {
     async function loadProfile() {
       const { data, error: queryError } = await supabase
         .from("profiles")
-        .select("display_name, username, bio")
+        .select("contact_number, display_name, username, bio")
         .eq("id", userId)
         .single();
 
@@ -38,6 +40,7 @@ export function ProfileSettings({ userId }: { userId: string }) {
         setError("Не удалось загрузить профиль.");
       } else {
         setProfile({
+          contact_number: data.contact_number ?? null,
           display_name: data.display_name ?? "",
           username: data.username ?? "",
           bio: data.bio ?? "",
@@ -48,6 +51,13 @@ export function ProfileSettings({ userId }: { userId: string }) {
 
     void loadProfile();
   }, [supabase, userId]);
+
+  async function copyContactNumber() {
+    if (profile.contact_number === null) return;
+    await navigator.clipboard.writeText(String(profile.contact_number));
+    setError("");
+    setMessage("Номер скопирован.");
+  }
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -126,6 +136,24 @@ export function ProfileSettings({ userId }: { userId: string }) {
 
       {error && <div className="error" role="alert">{error}</div>}
       {message && <div className="success" role="status">{message}</div>}
+
+      <section className="settings-card contact-number-card">
+        <div>
+          <div className="muted">Ваш уникальный номер</div>
+          <div className="contact-number-value">
+            {profile.contact_number ?? "Загрузка…"}
+          </div>
+          <p className="muted">Сообщите этот номер человеку, чтобы он добавил вас в контакты.</p>
+        </div>
+        <button
+          className="secondary"
+          type="button"
+          disabled={profile.contact_number === null}
+          onClick={copyContactNumber}
+        >
+          Копировать
+        </button>
+      </section>
 
       <section className="settings-card">
         <h2>Профиль</h2>
