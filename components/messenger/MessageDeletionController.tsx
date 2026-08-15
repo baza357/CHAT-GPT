@@ -16,6 +16,7 @@ function messageRow(messageId: number) {
 export function MessageDeletionController({ userId }: { userId: string }) {
   const supabase = useMemo(() => createClient(), []);
   const hiddenIdsRef = useRef<Set<number>>(new Set());
+  const deletedIdsRef = useRef<Set<number>>(new Set());
   const [target, setTarget] = useState<DeleteTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -23,10 +24,14 @@ export function MessageDeletionController({ userId }: { userId: string }) {
   useEffect(() => {
     let disposed = false;
 
-    function hideLocalMessages() {
-      for (const messageId of hiddenIdsRef.current) {
-        const row = messageRow(messageId);
-        if (row) row.style.setProperty("display", "none", "important");
+    function shouldHide(messageId: number) {
+      return hiddenIdsRef.current.has(messageId) || deletedIdsRef.current.has(messageId);
+    }
+
+    function hideMessage(messageId: number) {
+      const row = messageRow(messageId);
+      if (row && row.style.display !== "none") {
+        row.style.setProperty("display", "none", "important");
       }
     }
 
@@ -35,8 +40,8 @@ export function MessageDeletionController({ userId }: { userId: string }) {
         const id = Number(row.id.replace("chat-message-", ""));
         if (!Number.isFinite(id)) return;
 
-        if (hiddenIdsRef.current.has(id)) {
-          row.style.setProperty("display", "none", "important");
+        if (shouldHide(id)) {
+          if (row.style.display !== "none") row.style.setProperty("display", "none", "important");
           return;
         }
 
@@ -71,7 +76,7 @@ export function MessageDeletionController({ userId }: { userId: string }) {
 
       if (disposed || !data) return;
       hiddenIdsRef.current = new Set(data.map((row) => Number(row.message_id)));
-      hideLocalMessages();
+      hiddenIdsRef.current.forEach(hideMessage);
       decorateMessages();
     }
 
@@ -86,12 +91,8 @@ export function MessageDeletionController({ userId }: { userId: string }) {
       setTarget({ id, mine: element.dataset.messageMine === "1" });
     }
 
-    const observer = new MutationObserver(() => {
-      hideLocalMessages();
-      decorateMessages();
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+    const observer = new MutationObserver(() => decorateMessages());
+    observer.observe(document.body, { childList: true, subtree: true });
     document.addEventListener("click", onClick, true);
     decorateMessages();
     void loadHiddenMessages();
@@ -105,8 +106,7 @@ export function MessageDeletionController({ userId }: { userId: string }) {
           const messageId = Number((payload.new as { message_id?: number }).message_id);
           if (!Number.isFinite(messageId)) return;
           hiddenIdsRef.current.add(messageId);
-          const row = messageRow(messageId);
-          if (row) row.style.setProperty("display", "none", "important");
+          hideMessage(messageId);
         },
       )
       .on(
@@ -115,7 +115,8 @@ export function MessageDeletionController({ userId }: { userId: string }) {
         (payload) => {
           const messageId = Number((payload.old as { id?: number }).id);
           if (!Number.isFinite(messageId)) return;
-          messageRow(messageId)?.remove();
+          deletedIdsRef.current.add(messageId);
+          hideMessage(messageId);
         },
       )
       .subscribe();
@@ -183,7 +184,9 @@ export function MessageDeletionController({ userId }: { userId: string }) {
       return;
     }
 
-    messageRow(target.id)?.remove();
+    deletedIdsRef.current.add(target.id);
+    const row = messageRow(target.id);
+    if (row) row.style.setProperty("display", "none", "important");
     setBusy(false);
     setTarget(null);
   }
