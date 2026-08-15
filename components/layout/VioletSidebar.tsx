@@ -55,7 +55,7 @@ export function VioletSidebar({ active, displayName, email, avatarUrl }: VioletS
       </nav>
 
       <div className="violet-sidebar-profile">
-        <ProfileAvatar name={displayName || email || "Violet"} avatarUrl={avatarUrl} />
+        <ProfileAvatar name={displayName || email || "МастерPRO"} avatarUrl={avatarUrl} />
         <div>
           <strong>{displayName || "Мой профиль"}</strong>
           <small>{email || "В сети"}</small>
