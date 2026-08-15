@@ -17,6 +17,15 @@ type CurrentUser = {
   email: string;
 };
 
+type PresenceRow = {
+  id: string;
+  status: string;
+  last_seen: string | null;
+};
+
+const PRESENCE_POLL_MS = 5_000;
+const ONLINE_TTL_MS = 12_000;
+
 const profileFields =
   "id, username, display_name, personal_number, shift_number, job_title, workplace, production_role, production_line_id, shift_id, production_admin, avatar_url, bio, status, last_seen, created_at, updated_at";
 const messageFields =
@@ -33,6 +42,12 @@ const allowedAttachmentTypes = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
+
+function isProfileOnline(profile: Pick<UserProfile, "status" | "last_seen">, now = Date.now()) {
+  if (profile.status !== "online" || !profile.last_seen) return false;
+  const lastSeen = Date.parse(profile.last_seen);
+  return Number.isFinite(lastSeen) && now - lastSeen <= ONLINE_TTL_MS;
+}
 
 function formatFileSize(bytes: number | null) {
   if (!bytes) return "";
@@ -117,6 +132,7 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
   const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({});
   const [taskDetails, setTaskDetails] = useState<Record<number, CalendarTask>>({});
   const [chatReadStates, setChatReadStates] = useState<Record<string, string>>({});
+  const [presenceNow, setPresenceNow] = useState(() => Date.now());
   const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -302,6 +318,52 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
       void supabase.removeChannel(channel);
     };
   }, [fetchChatDirectory, supabase, user.id]);
+
+  const presenceIdsKey = useMemo(() => {
+    const ids = new Set<string>();
+    profiles.forEach((profile) => ids.add(profile.id));
+    directProfiles.forEach((profile) => ids.add(profile.id));
+    groups.forEach((group) => group.members.forEach((member) => ids.add(member.id)));
+    ids.delete(user.id);
+    return [...ids].sort().join(",");
+  }, [directProfiles, groups, profiles, user.id]);
+
+  useEffect(() => {
+    const ids = presenceIdsKey ? presenceIdsKey.split(",") : [];
+
+    async function refreshPresence() {
+      setPresenceNow(Date.now());
+      if (ids.length === 0) return;
+
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, status, last_seen")
+        .in("id", ids);
+      if (!data) return;
+
+      const presenceMap = new Map(
+        (data as PresenceRow[]).map((row) => [row.id, row]),
+      );
+      const withPresence = (profile: UserProfile) => {
+        const presence = presenceMap.get(profile.id);
+        return presence
+          ? { ...profile, status: presence.status, last_seen: presence.last_seen }
+          : profile;
+      };
+
+      setProfiles((current) => current.map(withPresence));
+      setDirectProfiles((current) => current.map(withPresence));
+      setGroups((current) => current.map((group) => ({
+        ...group,
+        members: group.members.map(withPresence),
+      })));
+      setSelected((current) => current ? withPresence(current) : current);
+    }
+
+    void refreshPresence();
+    const intervalId = window.setInterval(() => void refreshPresence(), PRESENCE_POLL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [presenceIdsKey, supabase]);
 
   useEffect(() => {
     setActiveChat(chatId);
@@ -631,6 +693,7 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
   const hasConversation = Boolean(selected || selectedGroup);
   const activeName = selectedGroup?.title ?? selected?.display_name ?? "Диалог";
   const activeAvatar = selectedGroup?.avatar_url ?? selected?.avatar_url ?? null;
+  const selectedOnline = selected ? isProfileOnline(selected, presenceNow) : false;
 
   return (
     <main className={`messenger-app ${hasConversation ? "has-chat" : ""} ${showInfo ? "show-info" : ""}`}>
@@ -644,7 +707,7 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
       <aside className="conversation-panel">
         <header className="conversation-header">
           <div>
-            <span className="mobile-eyebrow">VIOLET</span>
+            <span className="mobile-eyebrow">МАСТЕРPRO</span>
             <h1>Сообщения</h1>
           </div>
           <button className="compose-button" title="Создать группу" onClick={() => setShowGroupForm(true)}>
@@ -697,12 +760,12 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
               >
                 <div className="avatar-wrap">
                   <ProfileAvatar name={profile.display_name} avatarUrl={profile.avatar_url} className="conversation-avatar" />
-                  <span className="online-dot" />
+                  {isProfileOnline(profile, presenceNow) && <span className="online-dot" />}
                 </div>
                 <div className="conversation-copy">
                   <div className="conversation-line">
                     <strong>{profile.display_name}</strong>
-                    <time>{profile.status === "online" ? "сейчас" : ""}</time>
+                    <time>{isProfileOnline(profile, presenceNow) ? "online" : "не в сети"}</time>
                     <NotificationBadge count={unreadCounts[directChatIds[profile.id]] ?? 0} />
                   </div>
                   <div className="conversation-preview">
@@ -740,12 +803,12 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
               </button>
               <div className="avatar-wrap">
                 <ProfileAvatar name={activeName} avatarUrl={activeAvatar} className={`toolbar-avatar ${selectedGroup ? "group-avatar" : ""}`} />
-                {!selectedGroup && <span className="online-dot" />}
+                {!selectedGroup && selectedOnline && <span className="online-dot" />}
               </div>
               <div className="chat-person">
                 <div className="chat-person-copy">
                   <strong>{activeName}</strong>
-                  <small>{selectedGroup ? `${selectedGroup.members.length} участников` : "В сети"}</small>
+                  <small>{selectedGroup ? `${selectedGroup.members.length} участников` : selectedOnline ? "online" : "не в сети"}</small>
                 </div>
               </div>
               <div className="chat-actions">
@@ -911,10 +974,10 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
           <div className="info-profile">
             <div className="avatar-wrap">
               <ProfileAvatar name={activeName} avatarUrl={activeAvatar} className={`info-avatar ${selectedGroup ? "group-avatar" : ""}`} />
-              {!selectedGroup && <span className="online-dot" />}
+              {!selectedGroup && selectedOnline && <span className="online-dot" />}
             </div>
             <h2>{activeName}</h2>
-            <p>{selectedGroup ? `${selectedGroup.members.length} участников` : "В сети"}</p>
+            <p>{selectedGroup ? `${selectedGroup.members.length} участников` : selectedOnline ? "online" : "не в сети"}</p>
             {selected?.phone_e164 && (
               <p className="info-number">{formatRussianPhone(selected.phone_e164)}</p>
             )}
@@ -938,7 +1001,10 @@ export function MessengerLayout({ user }: { user: CurrentUser }) {
               {selectedGroup.members.map((member) => (
                 <div key={member.id}>
                   <ProfileAvatar name={member.display_name} avatarUrl={member.avatar_url} className="directory-avatar small" />
-                  <span><strong>{member.display_name}</strong><small>{member.id === user.id ? "Вы" : member.username}</small></span>
+                  <span>
+                    <strong>{member.display_name}</strong>
+                    <small>{member.id === user.id ? "Вы · online" : isProfileOnline(member, presenceNow) ? "online" : "не в сети"}</small>
+                  </span>
                 </div>
               ))}
             </div>
