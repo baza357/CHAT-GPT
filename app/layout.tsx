@@ -1,8 +1,22 @@
 import "./globals.css";
+import type { Metadata, Viewport } from "next";
+import { PwaRegistration } from "@/components/pwa/PwaRegistration";
+import { InternetCallProvider } from "@/components/calls/InternetCallProvider";
+import { NotificationProvider } from "@/components/notifications/NotificationProvider";
 
-export const metadata = {
-  title: "Messenger",
-  description: "MVP мессенджера на Next.js + Supabase"
+export const metadata: Metadata = {
+  title: { default: "Violet", template: "%s — Violet" },
+  description: "Violet — личные сообщения, контакты и звонки",
+  manifest: "/manifest.webmanifest",
+  icons: { icon: "/icon.svg", apple: "/icon.svg" },
+  appleWebApp: { capable: true, statusBarStyle: "default", title: "Violet" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#7047f5",
 };
 
 export default function RootLayout({
@@ -12,7 +26,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ru">
-      <body>{children}</body>
+      <body>
+        <NotificationProvider>
+          <InternetCallProvider>{children}</InternetCallProvider>
+        </NotificationProvider>
+        <PwaRegistration />
+      </body>
     </html>
   );
 }
