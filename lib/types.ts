@@ -1,5 +1,6 @@
 export type UserProfile = {
   id: string;
+  contact_number: number;
   username: string;
   display_name: string;
   avatar_url: string | null;

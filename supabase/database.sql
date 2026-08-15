@@ -11,6 +11,7 @@ revoke all on schema private from public, anon, authenticated;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
+  contact_number bigint generated always as identity (start with 10000000) unique,
   username text not null unique check (username ~ '^[a-z0-9_]{3,32}$'),
   display_name text not null,
   avatar_url text,
@@ -45,7 +46,16 @@ using ((select auth.uid()) = id)
 with check ((select auth.uid()) = id);
 
 revoke all on table public.profiles from anon;
-grant select, update on table public.profiles to authenticated;
+grant select on table public.profiles to authenticated;
+grant update (
+  username,
+  display_name,
+  avatar_url,
+  bio,
+  status,
+  last_seen,
+  updated_at
+) on table public.profiles to authenticated;
 
 -- Автоматически создаём профиль после регистрации.
 create or replace function private.handle_new_user()
@@ -131,6 +141,48 @@ drop trigger if exists profiles_set_updated_at on public.profiles;
 create trigger profiles_set_updated_at
 before update on public.profiles
 for each row execute function private.set_profile_updated_at();
+
+-- ---------- Contacts ----------
+
+create table if not exists public.contacts (
+  owner_id uuid not null references public.profiles(id) on delete cascade,
+  contact_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (owner_id, contact_id),
+  constraint contacts_cannot_add_self check (owner_id <> contact_id)
+);
+
+create index if not exists contacts_contact_id_idx
+on public.contacts (contact_id);
+
+alter table public.contacts enable row level security;
+
+drop policy if exists "contacts_select_own" on public.contacts;
+create policy "contacts_select_own"
+on public.contacts
+for select
+to authenticated
+using ((select auth.uid()) = owner_id);
+
+drop policy if exists "contacts_insert_own" on public.contacts;
+create policy "contacts_insert_own"
+on public.contacts
+for insert
+to authenticated
+with check (
+  (select auth.uid()) = owner_id
+  and owner_id <> contact_id
+);
+
+drop policy if exists "contacts_delete_own" on public.contacts;
+create policy "contacts_delete_own"
+on public.contacts
+for delete
+to authenticated
+using ((select auth.uid()) = owner_id);
+
+revoke all on table public.contacts from anon;
+grant select, insert, delete on table public.contacts to authenticated;
 
 -- ---------- Chats ----------
 
