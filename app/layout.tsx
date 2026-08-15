@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import { PwaRegistration } from "@/components/pwa/PwaRegistration";
+import { PresenceHeartbeat } from "@/components/presence/PresenceHeartbeat";
 import { InternetCallProvider } from "@/components/calls/InternetCallProvider";
 import { NotificationProvider } from "@/components/notifications/NotificationProvider";
 
@@ -30,6 +31,7 @@ export default function RootLayout({
         <NotificationProvider>
           <InternetCallProvider>{children}</InternetCallProvider>
         </NotificationProvider>
+        <PresenceHeartbeat />
         <PwaRegistration />
       </body>
     </html>
